@@ -1,0 +1,159 @@
+pipeline {
+    agent any
+    
+    environment {
+        JENKINS_HOME = "/var/jenkins_home"
+        JCASC_DIR = "${JENKINS_HOME}/jcasc"
+        CONFIG_REPO = "${env.JCASC_GIT_REPO}"
+        CONFIG_BRANCH = "${env.JCASC_GIT_BRANCH}"
+    }
+    
+    stages {
+        stage('Checkout Configuration') {
+            steps {
+                // Clean workspace before checkout
+                cleanWs()
+                
+                // Checkout the configuration repository
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "*/${CONFIG_BRANCH}"]],
+                    doGenerateSubmoduleConfigurations: false,
+                    extensions: [],
+                    submoduleCfg: [],
+                    userRemoteConfigs: [[
+                        credentialsId: 'github-credentials',
+                        url: "${CONFIG_REPO}"
+                    ]]
+                ])
+            }
+        }
+        
+        stage('Validate Configuration') {
+            steps {
+                script {
+                    // Validate YAML syntax (if yamllint is available)
+                    try {
+                        sh 'yamllint jenkins.yaml'
+                    } catch (Exception e) {
+                        echo "YAML linting not available or failed. Proceeding with Jenkins validation."
+                    }
+                    
+                    // Use Jenkins API to validate the configuration
+                    def response = httpRequest(
+                        url: "${JENKINS_URL}/configuration-as-code/checkNewSource",
+                        authentication: 'jenkins-admin',
+                        httpMode: 'POST',
+                        requestBody: readFile('jenkins.yaml'),
+                        contentType: 'application/yaml',
+                        validResponseCodes: '200,400'
+                    )
+                    
+                    if (response.status != 200) {
+                        error "Invalid JCasC configuration: ${response.content}"
+                    }
+                    
+                    echo "Configuration validated successfully"
+                }
+            }
+        }
+        
+        stage('Backup Current Configuration') {
+            steps {
+                script {
+                    def timestamp = new Date().format("yyyyMMdd-HHmmss")
+                    
+                    // Create backup directory if it doesn't exist
+                    sh "mkdir -p ${JCASC_DIR}/backups"
+                    
+                    // Backup current configuration
+                    sh "cp ${JCASC_DIR}/jenkins.yaml ${JCASC_DIR}/backups/jenkins-${timestamp}.yaml"
+                    
+                    echo "Current configuration backed up to ${JCASC_DIR}/backups/jenkins-${timestamp}.yaml"
+                }
+            }
+        }
+        
+        stage('Update Configuration') {
+            steps {
+                script {
+                    // Copy new configuration
+                    sh "cp jenkins.yaml ${JCASC_DIR}/jenkins.yaml"
+                    
+                    echo "Updated JCasC configuration"
+                }
+            }
+        }
+        
+        stage('Apply Configuration') {
+            steps {
+                script {
+                    // Get reload token from Jenkins credentials
+                    def reloadToken = ""
+                    withCredentials([string(credentialsId: 'jcasc-reload-token', variable: 'TOKEN')]) {
+                        reloadToken = TOKEN
+                    }
+                    
+                    // Reload configuration using the secured endpoint
+                    def response = httpRequest(
+                        url: "${JENKINS_URL}/reload-configuration-as-code/?casc-reload-token=${reloadToken}",
+                        httpMode: 'POST',
+                        validResponseCodes: '200,500'
+                    )
+                    
+                    if (response.status != 200) {
+                        error "Failed to reload configuration: ${response.content}"
+                    }
+                    
+                    echo "Configuration successfully reloaded"
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "JCasC configuration updated successfully"
+            
+            // Notify the team
+            emailext (
+                subject: "Jenkins Configuration Updated Successfully",
+                body: "The Jenkins configuration was updated successfully from the ${CONFIG_BRANCH} branch of ${CONFIG_REPO}.",
+                recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+            )
+        }
+        failure {
+            echo "JCasC configuration update failed"
+            
+            // Restore backup automatically (optional - uncomment if needed)
+            /*
+            script {
+                def backupDir = "${JCASC_DIR}/backups"
+                def latestBackup = sh(script: "ls -t ${backupDir} | head -1", returnStdout: true).trim()
+                
+                if (latestBackup) {
+                    echo "Attempting to restore previous configuration from ${backupDir}/${latestBackup}"
+                    sh "cp ${backupDir}/${latestBackup} ${JCASC_DIR}/jenkins.yaml"
+                    
+                    // Use Jenkins API to reload the configuration
+                    withCredentials([string(credentialsId: 'jcasc-reload-token', variable: 'TOKEN')]) {
+                        httpRequest(
+                            url: "${JENKINS_URL}/reload-configuration-as-code/?casc-reload-token=${TOKEN}",
+                            httpMode: 'POST'
+                        )
+                    }
+                    
+                    echo "Restored previous configuration"
+                }
+            }
+            */
+            
+            // Notify the team of the failure
+            emailext (
+                subject: "Jenkins Configuration Update Failed",
+                body: "The Jenkins configuration update from the ${CONFIG_BRANCH} branch of ${CONFIG_REPO} failed.\n\nCheck the build log for details: ${BUILD_URL}console",
+                recipientProviders: [[$class: 'DevelopersRecipientProvider'], [$class: 'RequesterRecipientProvider']]
+            )
+        }
+    }
+}

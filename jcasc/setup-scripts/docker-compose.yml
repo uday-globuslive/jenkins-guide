@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    restart: unless-stopped
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    environment:
+      - CASC_JENKINS_CONFIG=/var/jenkins_home/jcasc
+      - CASC_RELOAD_TOKEN=${CASC_RELOAD_TOKEN}
+      - JENKINS_URL=${JENKINS_URL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - GITHUB_USERNAME=${GITHUB_USERNAME}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./jcasc:/var/jenkins_home/jcasc
+      - ./setup-scripts/jcasc-reload-http-endpoint.groovy:/var/jenkins_home/init.groovy.d/jcasc-reload-http-endpoint.groovy
+    networks:
+      - jenkins-network
+
+  # Optional: Configuration monitor sidecar
+  config-monitor:
+    image: alpine:latest
+    container_name: jenkins-config-monitor
+    restart: unless-stopped
+    volumes:
+      - ./jcasc:/config-repo
+    environment:
+      - JENKINS_URL=${JENKINS_URL}
+      - CASC_RELOAD_TOKEN=${CASC_RELOAD_TOKEN}
+    command: >
+      /bin/sh -c "
+        apk add --no-cache curl git;
+        
+        # Clone the repository initially
+        if [ ! -d /config-repo/.git ]; then
+          git clone ${JCASC_GIT_REPO} /config-repo-temp;
+          cp -r /config-repo-temp/* /config-repo/;
+          rm -rf /config-repo-temp;
+        fi;
+        
+        while true; do
+          cd /config-repo;
+          
+          # Store current hash
+          CURRENT_HASH=$(git rev-parse HEAD 2>/dev/null || echo 'none');
+          
+          # Pull latest changes
+          git pull;
+          
+          # Get new hash
+          NEW_HASH=$(git rev-parse HEAD);
+          
+          # If hash changed, trigger reload
+          if [ \"$CURRENT_HASH\" != \"$NEW_HASH\" ]; then
+            echo \"Configuration changed. Triggering reload...\";
+            curl -X POST \"${JENKINS_URL}/reload-jcasc?token=${CASC_RELOAD_TOKEN}\";
+            echo \"\nReload triggered at $(date)\";
+          fi;
+          
+          # Wait before next check (5 minutes)
+          sleep 300;
+        done
+      "
+    networks:
+      - jenkins-network
+
+volumes:
+  jenkins_home:
+
+networks:
+  jenkins-network:
+    driver: bridge

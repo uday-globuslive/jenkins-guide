@@ -1,0 +1,114 @@
+jenkins:
+  systemMessage: "Jenkins configured automatically through Docker Compose and JCasC"
+  numExecutors: 2
+  mode: NORMAL
+  scmCheckoutRetryCount: 3
+  
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${ADMIN_USER}"
+          password: "${ADMIN_PASSWORD}"
+  
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            description: "Jenkins administrators"
+            permissions:
+              - "Overall/Administer"
+            assignments:
+              - "${ADMIN_USER}"
+          - name: "developer"
+            description: "Jenkins developers"
+            permissions:
+              - "Overall/Read"
+              - "Job/Build"
+              - "Job/Read"
+            assignments:
+              - "developer"
+
+tool:
+  git:
+    installations:
+      - name: git
+        home: git
+  
+  maven:
+    installations:
+      - name: "Maven 3"
+        properties:
+          - installSource:
+              installers:
+                - maven:
+                    id: "3.9.6"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "azure-credentials"
+              username: "${AZURE_CLIENT_ID}"
+              password: "${AZURE_CLIENT_SECRET}"
+              description: "Azure Service Principal"
+
+unclassified:
+  location:
+    url: "http://localhost:8080/jenkins/"
+  
+  azureVMAgents:
+    configurationStatus: "pass"
+    azureCredentialsId: "azure-credentials"
+    resourceGroup: "jenkins-agents"
+    deploymentTimeout: 1200
+    maxVirtualMachinesLimit: 10
+    templates:
+      - name: "azure-linux-agent"
+        labels: "azure linux"
+        location: "eastus"
+        virtualMachineSize: "Standard_D2s_v3"
+        storageAccountNameReferenceType: "new"
+        diskType: "managed"
+        newStorageAccountName: "jenkinsagent"
+        imageTopLevelType: "basic"
+        builtInImage: "Ubuntu 18.04 LTS"
+        initScript: |
+          #!/bin/bash
+          apt update
+          apt install -y openjdk-11-jdk-headless
+        retentionTimeInMin: 60
+
+# Default plugins to install in addition to the suggested ones
+plugins:
+  required:
+    - configuration-as-code
+    - workflow-aggregator
+    - git
+    - git-client
+    - github-branch-source
+    - docker-plugin
+    - docker-workflow
+    - azure-vm-agents
+    - azure-credentials
+    - blueocean
+    - pipeline-stage-view
+    - pipeline-github
+    - http_request
+    - job-dsl
+    - role-strategy
+    - credentials-binding
+    - timestamper
+    - ws-cleanup
+    - ansicolor
+
+# Sample job definition using Job DSL
+jobs:
+  - script: >
+      folder('CI-CD') {
+        displayName('CI/CD Pipelines')
+        description('Folder for CI/CD pipelines')
+      }

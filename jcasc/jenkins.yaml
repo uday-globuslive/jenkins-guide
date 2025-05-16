@@ -1,0 +1,105 @@
+jenkins:
+  systemMessage: "Jenkins configured automatically by Jenkins Configuration as Code plugin"
+  
+  # Global configurations
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: JCASC_GIT_REPO
+            value: "https://github.com/your-org/jenkins-config.git"
+          - key: JCASC_GIT_BRANCH
+            value: "main"
+  
+  # Security configuration
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          name: "Jenkins Admin"
+          password: "${ADMIN_PASSWORD}" # Secret handled via environment variable
+  
+  # Authorization strategy
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # GitHub webhook integration configuration
+  remotingSecurity:
+    enabled: true
+
+# Plugin configurations
+unclassified:
+  # GitHub integration configuration
+  githubpluginconfig:
+    configs:
+      - name: "GitHub"
+        apiUrl: "https://api.github.com"
+        manageHooks: true
+        credentialsId: "github-webhook-token"
+  
+  # GitHub webhook configuration
+  githubWebhooks:
+    configs:
+      - credentialsId: "github-webhook-token"
+        
+  # Job configurations
+  location:
+    url: "${JENKINS_URL}"
+    adminAddress: "admin@example.com"
+
+# Define a seed job that will watch for JCasC configuration updates
+jobs:
+  - script: >
+      pipelineJob('JCasC-Config-Updater') {
+        description('This job updates the Jenkins Configuration when changes are pushed to the config repository')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('${JCASC_GIT_REPO}')
+                  credentials('github-credentials')
+                }
+                branch('${JCASC_GIT_BRANCH}')
+              }
+            }
+            scriptPath('Jenkinsfile')
+          }
+        }
+        triggers {
+          genericTrigger {
+            genericVariables {
+              genericVariable {
+                key('ref')
+                value('$.ref')
+              }
+              genericVariable {
+                key('repository')
+                value('$.repository.name')
+              }
+            }
+            regexpFilterText('$ref')
+            regexpFilterExpression('refs/heads/${JCASC_GIT_BRANCH}')
+            token('jcasc-update-token')
+            printContributedVariables(true)
+            printPostContent(true)
+            causeString('Configuration update triggered by $repository on $ref')
+          }
+        }
+      }
+
+# Credentials configuration (storing securely)
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "github-credentials"
+              username: "${GITHUB_USERNAME}"
+              password: "${GITHUB_TOKEN}"
+          - string:
+              scope: GLOBAL
+              id: "github-webhook-token"
+              secret: "${GITHUB_WEBHOOK_SECRET}"

@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    restart: unless-stopped
+    privileged: true
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - ./casc_configs:/var/jenkins_home/casc_configs
+    environment:
+      - CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs
+      - JENKINS_OPTS="--prefix=/jenkins"
+      - JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=admin_password_here
+      # Azure credentials (replace with your values)
+      - AZURE_CLIENT_ID=your_client_id_here
+      - AZURE_CLIENT_SECRET=your_client_secret_here
+      - AZURE_TENANT_ID=your_tenant_id_here
+      - AZURE_SUBSCRIPTION_ID=your_subscription_id_here
+
+volumes:
+  jenkins_home:
+    driver: local
